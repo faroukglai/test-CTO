@@ -171,7 +171,7 @@ export function TestimonialsSection() {
                   
                   {/* Content */}
                   <p className="text-gray-300 leading-relaxed mb-6 italic">
-                    "{testimonial.content}"
+                    &quot;{testimonial.content}&quot;
                   </p>
                   
                   {/* Author */}

@@ -12,9 +12,7 @@ import {
   BarChart3,
   Lock,
   Rocket,
-  Users,
   Settings,
-  TrendingUp
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 
