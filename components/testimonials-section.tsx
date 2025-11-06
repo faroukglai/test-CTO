@@ -170,9 +170,9 @@ export function TestimonialsSection() {
                   </div>
                   
                   {/* Content */}
-                  <p className="text-gray-300 leading-relaxed mb-6 italic">
-                    "{testimonial.content}"
-                  </p>
+                   <p className="text-gray-300 leading-relaxed mb-6 italic">
+                     &quot;{testimonial.content}&quot;
+                   </p>
                   
                   {/* Author */}
                   <div className="flex items-center gap-4">
