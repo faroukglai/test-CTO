@@ -6,14 +6,9 @@ import {
   Users, 
   Shield, 
   BarChart3, 
-  Bot, 
   FileText,
   ShoppingCart,
-  Heart,
-  Factory,
-  GraduationCap,
   Stethoscope,
-  Building
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 

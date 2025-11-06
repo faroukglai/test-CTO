@@ -1,0 +1,671 @@
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================================================
+// TENANTS & USERS
+// ============================================================================
+
+model Tenant {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  email         String
+  logo          String?
+  website       String?
+  industry      String?
+  taxId         String?  @unique
+  country       String   @default("US")
+  currency      String   @default("USD")
+  timeZone      String   @default("UTC")
+  encryptionKey String?  // For E2EE
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  users         User[]
+  invoices      Invoice[]
+  payments      Payment[]
+  lineItems     LineItem[]
+  templates     Template[]
+  disputes      Dispute[]
+  auditLogs     AuditLog[]
+  aiActions     AiAction[]
+  webhooks      Webhook[]
+  apiKeys       ApiKey[]
+  attachments   Attachment[]
+  notifications Notification[]
+  metrics       Metric[]
+  subscriptions Subscription[]
+  paymentRules  PaymentRule[]
+
+  // Billing
+  plan          String   @default("starter") // starter, pro, enterprise
+  usageCount    Int      @default(0)
+  rateLimit     Int      @default(1000) // requests per hour
+  maxUsers      Int      @default(5)
+  billingStatus String   @default("active") // active, suspended, cancelled
+
+  @@index([slug])
+}
+
+model User {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email         String
+  name          String?
+  password      String?  // Optional for OAuth
+  role          String   @default("viewer") // admin, accountant, approver, payer, viewer
+  status        String   @default("active") // active, invited, deactivated
+  avatar        String?
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Auth
+  oauthProvider String?  // google, microsoft, saml
+  oauthId       String?  // Provider's user ID
+  samlId        String?  // SAML name ID
+  mfaEnabled    Boolean  @default(false)
+  mfaSecret     String?
+
+  // Relations
+  invoices      Invoice[]        @relation("InvoiceCreator")
+  approvals     Invoice[]        @relation("InvoiceApprover")
+  comments      Comment[]
+  aiActions     AiAction[]
+  auditLogs     AuditLog[]
+  sessions      Session[]
+  notifications Notification[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([oauthId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================================
+// INVOICES & TEMPLATES
+// ============================================================================
+
+model Invoice {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceNumber   String
+  type            String   @default("standard") // standard, recurring, milestone, escrow
+  status          String   @default("draft") // draft, sent, viewed, partially_paid, paid, overdue, disputed, cancelled
+  currency        String   @default("USD")
+  exchangeRate    Float    @default(1.0)
+  
+  // Parties
+  fromName        String
+  fromEmail       String
+  fromAddress     String?
+  toName          String
+  toEmail         String
+  toAddress       String?
+  customerId      String?  // Customer reference for recurring
+  
+  // Amounts
+  subtotal        Decimal  @db.Numeric(12, 2)
+  taxAmount       Decimal  @db.Numeric(12, 2)
+  discountAmount  Decimal  @db.Numeric(12, 2)
+  totalAmount     Decimal  @db.Numeric(12, 2)
+  paidAmount      Decimal  @db.Numeric(12, 2) @default(0)
+  
+  // Dates
+  issueDate       DateTime
+  dueDate         DateTime
+  sentAt          DateTime?
+  viewedAt        DateTime?
+  paidAt          DateTime?
+  
+  // Metadata
+  description     String?
+  notes           String?
+  terms           String?
+  templateId      String?
+  template        Template? @relation(fields: [templateId], references: [id])
+  createdById     String
+  createdBy       User     @relation("InvoiceCreator", fields: [createdById], references: [id])
+  approvedById    String?
+  approvedBy      User?    @relation("InvoiceApprover", fields: [approvedById], references: [id])
+  
+  // Features
+  recurring       Recurring?
+  escrow          Escrow?
+  dispute         Dispute?
+  
+  // Automation
+  duningStartedAt DateTime?
+  nextRetryAt     DateTime?
+  attemptCount    Int      @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  lineItems       LineItem[]
+  payments        Payment[]
+  comments        Comment[]
+  attachments     Attachment[]
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+
+  @@unique([tenantId, invoiceNumber])
+  @@index([tenantId])
+  @@index([status])
+  @@index([customerId])
+  @@index([dueDate])
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  from      String
+  fromEmail String
+  style     String   @default("modern") // modern, classic, minimalist
+  color     String   @default("#3b82f6")
+  logo      String?
+  content   String   @db.Text
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  invoices  Invoice[]
+
+  @@index([tenantId])
+}
+
+// ============================================================================
+// LINE ITEMS & TAX
+// ============================================================================
+
+model LineItem {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceId     String
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  description   String
+  quantity      Decimal  @db.Numeric(10, 2)
+  unitPrice     Decimal  @db.Numeric(12, 2)
+  amount        Decimal  @db.Numeric(12, 2)
+  
+  // Tax
+  taxRate       Decimal  @db.Numeric(5, 2) @default(0)
+  taxAmount     Decimal  @db.Numeric(12, 2) @default(0)
+  taxCode       String?  // e.g., "S", "Z" for Avalara
+  
+  // Details
+  category      String?
+  sku           String?
+  metadata      String?  @db.Json // Custom fields
+  
+  // Proration (for recurring)
+  prorationFactor Float?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@index([tenantId])
+}
+
+// ============================================================================
+// RECURRING & SUBSCRIPTIONS
+// ============================================================================
+
+model Recurring {
+  id             String   @id @default(cuid())
+  invoiceId      String   @unique
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  frequency      String   @default("monthly") // daily, weekly, monthly, quarterly, yearly
+  startDate      DateTime
+  endDate        DateTime?
+  nextBillingAt  DateTime
+  lastBilledAt   DateTime?
+  cycles         Int?     // null = infinite
+  cyclesCompleted Int    @default(0)
+  
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([invoiceId])
+}
+
+model Subscription {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId   String
+  
+  name         String
+  status       String   @default("active") // active, paused, cancelled
+  amount       Decimal  @db.Numeric(12, 2)
+  currency     String   @default("USD")
+  interval     String   @default("monthly") // monthly, yearly
+  
+  startDate    DateTime
+  endDate      DateTime?
+  cancelledAt  DateTime?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([customerId])
+}
+
+// ============================================================================
+// PAYMENTS & ROUTING
+// ============================================================================
+
+model Payment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceId       String
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  amount          Decimal  @db.Numeric(12, 2)
+  currency        String   @default("USD")
+  status          String   @default("pending") // pending, processing, succeeded, failed, refunded
+  method          String   @default("unknown") // stripe, paypal, bank_transfer, card, ach, sepa
+  
+  // Payment processor
+  stripePaymentIntentId String?
+  stripesChargeId       String?
+  
+  // Routing
+  routeId         String?
+  route           PaymentRule? @relation(fields: [routeId], references: [id])
+  destinationAccount String?
+  
+  // Escrow
+  escrowId        String?
+  escrow          Escrow?      @relation(fields: [escrowId], references: [id])
+  
+  // Details
+  reference       String?
+  receipt         String?
+  metadata        String?  @db.Json
+  
+  // Timeline
+  initiatedAt     DateTime
+  processedAt     DateTime?
+  settledAt       DateTime?
+  failureReason   String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([status])
+  @@index([stripePaymentIntentId])
+}
+
+model PaymentRule {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  name          String
+  description   String?
+  
+  // Conditions
+  minAmount     Decimal? @db.Numeric(12, 2)
+  maxAmount     Decimal? @db.Numeric(12, 2)
+  currencies    String?  @db.Json // Array of currencies
+  customerIds   String?  @db.Json // Array of customer IDs
+  
+  // Actions
+  splitPercentage Decimal? @db.Numeric(5, 2) // % to primary account
+  primaryAccount String   // Bank account or wallet ID
+  secondaryAccount String? // Split destination
+  holdEscrow    Boolean  @default(false)
+  autoRelease   Boolean  @default(false)
+  
+  priority      Int      @default(0)
+  active        Boolean  @default(true)
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments      Payment[]
+
+  @@index([tenantId])
+}
+
+// ============================================================================
+// ESCROW & MILESTONE
+// ============================================================================
+
+model Escrow {
+  id              String   @id @default(cuid())
+  invoiceId       String   @unique
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  type            String   @default("standard") // standard, milestone
+  heldAmount      Decimal  @db.Numeric(12, 2)
+  releasedAmount  Decimal  @db.Numeric(12, 2) @default(0)
+  
+  status          String   @default("held") // held, partially_released, fully_released, disputed
+  
+  // Milestone
+  milestones      String?  @db.Json // Array of milestone objects
+  completedAt     DateTime?
+  approverNotes   String?
+  
+  // Timeline
+  releasedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  payments        Payment[]
+
+  @@index([invoiceId])
+}
+
+// ============================================================================
+// DISPUTES
+// ============================================================================
+
+model Dispute {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceId       String   @unique
+  invoice         Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  reason          String
+  status          String   @default("open") // open, in_progress, resolved, rejected, credited
+  priority        String   @default("medium") // low, medium, high, critical
+  
+  amount          Decimal  @db.Numeric(12, 2)
+  creditAmount    Decimal? @db.Numeric(12, 2)
+  
+  description     String?  @db.Text
+  notes           String?  @db.Text
+  
+  filedAt         DateTime
+  dueBy           DateTime?
+  resolvedAt      DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  comments        Comment[]
+  attachments     Attachment[]
+  auditLogs       AuditLog[]
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([status])
+}
+
+// ============================================================================
+// COMMENTS & COLLABORATION
+// ============================================================================
+
+model Comment {
+  id          String   @id @default(cuid())
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  disputeId   String?
+  dispute     Dispute? @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  content     String   @db.Text
+  mentions    String?  @db.Json // Array of user IDs
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([invoiceId])
+  @@index([disputeId])
+  @@index([userId])
+}
+
+// ============================================================================
+// ATTACHMENTS
+// ============================================================================
+
+model Attachment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  disputeId   String?
+  dispute     Dispute? @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  
+  fileName    String
+  fileType    String
+  fileSize    Int
+  fileUrl     String
+  
+  // Encryption
+  encrypted   Boolean  @default(false)
+  encryptionKey String?
+  
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([invoiceId])
+  @@index([disputeId])
+}
+
+// ============================================================================
+// AUDIT & ACTIVITY
+// ============================================================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  action      String   // e.g., "invoice.created", "payment.processed", "ai.suggestion"
+  entityType  String   // e.g., "Invoice", "Payment", "AiAction"
+  entityId    String
+  
+  changes     String?  @db.Json // Before/after values
+  metadata    String?  @db.Json
+  ipAddress   String?
+  userAgent   String?
+  
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  
+  paymentId   String?
+  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  
+  disputeId   String?
+  dispute     Dispute? @relation(fields: [disputeId], references: [id], onDelete: SetNull)
+  
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// AI ACTIONS
+// ============================================================================
+
+model AiAction {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type          String   // "ocr", "extraction", "suggestion", "negotiation", "dispute_response"
+  status        String   @default("pending") // pending, processing, completed, failed
+  
+  invoiceId     String?
+  disputeId     String?
+  
+  prompt        String   @db.Text
+  response      String?  @db.Text
+  
+  model         String   @default("gpt-4") // LLM model used
+  usage         String?  @db.Json // tokens, cost, etc.
+  
+  confidence    Float?   // 0-1 confidence score
+  feedback      String?  // User feedback for model refinement
+  
+  error         String?
+  
+  createdAt     DateTime @default(now())
+  processedAt   DateTime?
+
+  @@index([tenantId])
+  @@index([type])
+  @@index([status])
+}
+
+// ============================================================================
+// WEBHOOKS
+// ============================================================================
+
+model Webhook {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  url         String
+  events      String   @db.Json // Array of events to subscribe
+  secret      String
+  active      Boolean  @default(true)
+  
+  retries     Int      @default(0)
+  lastTriedAt DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  type        String   // "invoice_sent", "payment_received", "dispute_filed", etc.
+  title       String
+  message     String   @db.Text
+  
+  channel     String   @default("in_app") // in_app, email, sms, webhook
+  
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  paymentId   String?
+  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  
+  read        Boolean  @default(false)
+  readAt      DateTime?
+  sentAt      DateTime
+  
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([read])
+}
+
+// ============================================================================
+// API KEYS & AUTHENTICATION
+// ============================================================================
+
+model ApiKey {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  name        String
+  key         String   @unique // hashed
+  prefix      String   @unique // for display
+  
+  permissions String   @db.Json // Array of permissions
+  rateLimit   Int?     // Requests per hour
+  
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  active      Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+// ============================================================================
+// METRICS & ANALYTICS
+// ============================================================================
+
+model Metric {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  metric      String   // e.g., "invoice.created", "payment.processed", "api.request"
+  value       Float
+  unit        String   @default("count")
+  
+  tags        String?  @db.Json // e.g., { "status": "paid", "method": "stripe" }
+  
+  timestamp   DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([metric])
+  @@index([timestamp])
+}

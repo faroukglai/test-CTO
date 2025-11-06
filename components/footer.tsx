@@ -195,7 +195,7 @@ export function Footer() {
 
             {/* Social links */}
             <div className="flex items-center gap-4">
-              {socialLinks.map((social, index) => (
+              {socialLinks.map((social) => (
                 <motion.a
                   key={social.label}
                   href={social.href}
