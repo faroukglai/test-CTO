@@ -120,3 +120,39 @@ html {
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* Page transition animations */
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes page-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+.page-fade-in {
+  animation: page-fade-in 0.3s ease-out;
+}
+
+.page-fade-out {
+  animation: page-fade-out 0.3s ease-out;
+}
+
+/* Link prefetch optimization */
+a {
+  @apply transition-colors duration-200;
+}
